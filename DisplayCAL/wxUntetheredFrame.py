@@ -37,6 +37,7 @@ from DisplayCAL import audio
 from DisplayCAL import colormath
 from DisplayCAL import config
 from DisplayCAL import localization as lang
+from DisplayCAL import ICCProfile as ICCP
 
 BGCOLOUR = wx.Colour(0x33, 0x33, 0x33)
 FGCOLOUR = wx.Colour(0x99, 0x99, 0x99)
@@ -44,10 +45,6 @@ FGCOLOUR = wx.Colour(0x99, 0x99, 0x99)
 
 class UntetheredFrame(BaseFrame):
     def __init__(self, parent=None, handler=None, keyhandler=None, start_timer=True):
-        # BaseFrame.__init__(self, parent, wx.ID_ANY,
-        #                    lang.getstr("measurement.untethered"),
-        #                    style=wx.DEFAULT_FRAME_STYLE | wx.TAB_TRAVERSAL,
-        #                    name="untetheredframe")
         BaseFrame.__init__(
             self,
             parent,
@@ -227,12 +224,58 @@ class UntetheredFrame(BaseFrame):
                 # to work best to reduce flicker.
                 child.SetDoubleBuffered(True)
         self.logger = get_file_logger("untethered")
+        self.__mcws = None
         self._setup()
 
         self.Show()
 
         if start_timer:
             self.start_timer()
+
+    @property
+    def cgats(self):
+        return self.__cgats
+
+    @cgats.setter
+    def cgats(self, cgats):
+        self.__cgats = cgats
+        mcws_ip = getcfg("mcws.ip")
+        if mcws_ip:
+            from DisplayCAL.mcws import MediaServer
+
+            mcws_username = getcfg("mcws.username")
+            mcws_pass = getcfg("mcws.password")
+            mcws_duration = getcfg("mcws.duration")
+            mcws_zone = getcfg("mcws.zone")
+            mcws_display_pause = getcfg("mcws.display_pause")
+            mcws_patch_pause = getcfg("mcws.patch_pause")
+            mcws_patch_reads = getcfg("mcws.patch_reads")
+            simulation_profile = (
+                ICCP.ICCProfile(getcfg("measurement_report.simulation_profile"))
+                if getcfg("measurement_report.use_simulation_profile")
+                else None
+            )
+            hdr = False
+            if simulation_profile:
+                desc = simulation_profile.getDescription()
+                hdr = desc.startswith("DCI-P3") or desc.startswith("BT.2020")
+            auth = (mcws_username, mcws_pass) if mcws_username and mcws_pass else None
+            chart_name = cgats[0].DESCRIPTOR.decode()
+            self.__mcws = MediaServer(
+                mcws_ip,
+                mcws_duration,
+                chart_name,
+                hdr=hdr,
+                auth=auth,
+                parent=self,
+                zone=mcws_zone,
+                display_pause_ms=mcws_display_pause,
+                patch_pause_ms=mcws_patch_pause,
+                patch_reads=mcws_patch_reads,
+            )
+            self.__mcws.display_patch(0)
+        else:
+            self.__mcws = None
 
     def EndModal(self, returncode=wx.ID_OK):
         return returncode
@@ -515,6 +558,7 @@ class UntetheredFrame(BaseFrame):
             )
             if not XYZ:
                 return
+
             def is_white(r):
                 return r["RGB_R"] == 100 and r["RGB_G"] == 100 and r["RGB_B"] == 100
 
@@ -535,14 +579,19 @@ class UntetheredFrame(BaseFrame):
                 print("Delta E to last recorded Lab: %.4f" % delta["E"])
                 print("Abs. delta L to last recorded Lab: %.4f" % abs(delta["L"]))
                 print("Abs. delta C to last recorded Lab: %.4f" % abs(delta["C"]))
-            consecutive_white_patch = self.index and is_white(row) and is_white(self.cgats[0].DATA[self.index - 1])
+            consecutive_white_patch = (
+                self.index
+                and is_white(row)
+                and is_white(self.cgats[0].DATA[self.index - 1])
+            )
             measurement_exceeds_delta = delta["E"] > getcfg("untethered.min_delta") or (
                 abs(delta["L"]) > getcfg("untethered.min_delta.lightness")
                 and abs(delta["C"]) < getcfg("untethered.max_delta.chroma")
             )
             if consecutive_white_patch or measurement_exceeds_delta:
                 self.measure_count += 1
-                if self.measure_count == 2:
+                use_values = self.measure_count >= (self.__mcws.patch_reads if self.__mcws else 2)
+                if use_values:
                     if getcfg("measurement.play_sound"):
                         self.commit_sound.safe_play()
                     self.measure_count = 0
@@ -554,7 +603,7 @@ class UntetheredFrame(BaseFrame):
                             "RGB_R": row["RGB_R"],
                             "RGB_G": row["RGB_G"],
                             "RGB_B": row["RGB_B"],
-                            "SAMPLE_ID": row["SAMPLE_ID"]
+                            "SAMPLE_ID": row["SAMPLE_ID"],
                         }
                     )
                     if query:
@@ -599,6 +648,8 @@ class UntetheredFrame(BaseFrame):
                                 self.index, "\u25ba %i" % (self.index + 1)
                             )
                             self.grid.MakeCellVisible(self.index, 0)
+                            if self.__mcws:
+                                self.__mcws.display_patch(self.index)
         if "key to take a reading" in txt and not self.last_error:
             if getcfg("untethered.measure.auto") and self.is_measuring:
                 if not self.finished and self.keepGoing:
@@ -736,6 +787,8 @@ class UntetheredFrame(BaseFrame):
         self.show_RGB(not show_XYZ)
         if show_XYZ:
             self.show_XYZ()
+        if self.__mcws:
+            self.__mcws.display_patch(self.index)
         self.enable_btns()
 
     def write(self, txt):

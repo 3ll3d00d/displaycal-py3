@@ -1384,7 +1384,8 @@ def http_request(
     if headers is None:
         headers = get_default_headers()
         if request_type == "GET":
-            path += "?" + params
+            if params:
+                path += "?" + params
             params = None
         else:
             if files:
