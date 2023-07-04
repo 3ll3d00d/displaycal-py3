@@ -1608,7 +1608,8 @@ class TempXmlResource(object):
 				# Fix background color not working for panels under wxGTK3
 				if "gtk3" in wx.PlatformInfo:
 					xml = xml.replace('class="wxPanel"',
-									  'class="wxPanel" subclass="DisplayCAL.wxfixes.wx_Panel"')
+									  # 'class="wxPanel" subclass="DisplayCAL.wxfixes.wx_Panel"')
+									  'class="wxPanel" subclass="wxfixes.wx_Panel"')
 				# Write modified XML
 				xmlpath = os.path.join(TempXmlResource._temp,
 									   os.path.basename(xmlpath))

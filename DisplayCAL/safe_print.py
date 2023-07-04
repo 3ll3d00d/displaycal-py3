@@ -101,6 +101,7 @@ class SafePrinter():
 			else:
 				width = int(pad)
 			line = line.ljust(width, padchar)
+		print(line)
 		if fn:
 			fn(line)
 		else:
